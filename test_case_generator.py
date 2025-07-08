@@ -41,71 +41,273 @@ async def extract_forms_from_url(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
-        await page.goto(url, timeout=60000)
+        
+        # Set longer timeout and add debugging
+        print(f"🔍 Navigating to: {url}")
+        print("⏳ This may take a moment for complex sites...")
+        
+        try:
+            # Increase timeout for complex sites
+            await page.goto(url, timeout=120000)  # 2 minutes timeout
+            
+            print("✅ Page loaded successfully")
+            
+            # Wait for dynamic content to load
+            print("⏳ Waiting for dynamic content...")
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            await page.wait_for_timeout(5000)  # Additional wait for JavaScript execution
+            
+            print("✅ Dynamic content loaded")
+            
+        except Exception as e:
+            print(f"❌ Error loading page: {e}")
+            print("🔄 Attempting to continue with current page state...")
+        
+        # Check if page loaded at all
+        try:
+            page_title = await page.title()
+            print(f"📄 Page title: {page_title}")
+        except Exception as e:
+            print(f"❌ Could not get page title: {e}")
+            await browser.close()
+            return []
 
         forms = await page.query_selector_all("form")
+        print(f"✅ Found {len(forms)} form(s)")
+        
         data = []
 
         for form in forms:
-            inputs = await form.query_selector_all("input, textarea")
-            buttons = await form.query_selector_all("button, input[type=submit]")
+            print(f"📝 Processing form {len(data) + 1}...")
+            
+            # Enhanced input extraction
+            inputs = await form.query_selector_all("input, textarea, select")
+            print(f"  - Found {len(inputs)} input elements")
+            
+            # Submit triggers (buttons, links, custom elements)
+            submit_triggers = await form.query_selector_all("button, input[type=submit], input[type=button], [role='button'], .btn, .button")
+            print(f"  - Found {len(submit_triggers)} submit triggers")
+            
+            # Validation elements
+            validation_elements = await form.query_selector_all("[data-validation], [data-validate], .validation, .error, .invalid, [aria-invalid]")
+            print(f"  - Found {len(validation_elements)} validation elements")
+            
+            # Custom widgets (date pickers, sliders, file uploads, etc.)
+            custom_widgets = await form.query_selector_all("input[type='date'], input[type='file'], input[type='range'], input[type='color'], .datepicker, .slider, .upload, .widget")
+            print(f"  - Found {len(custom_widgets)} custom widgets")
+            
+            # Dynamic elements (elements that change based on user interaction)
+            dynamic_elements = await form.query_selector_all("[data-dynamic], [data-toggle], .dynamic, .collapsible, .expandable, [aria-expanded]")
+            print(f"  - Found {len(dynamic_elements)} dynamic elements")
 
             input_fields = []
             for inp in inputs:
-                name = await inp.get_attribute("name")
-                input_type = await inp.get_attribute("type")
-                placeholder = await inp.get_attribute("placeholder")
-                required = await inp.get_attribute("required")
-                max_length = await inp.get_attribute("maxlength")
-                pattern = await inp.get_attribute("pattern")
-                
-                input_fields.append({
-                    "name": name,
-                    "type": input_type,
-                    "placeholder": placeholder,
-                    "required": required is not None,
-                    "max_length": max_length,
-                    "pattern": pattern
+                try:
+                    name = await inp.get_attribute("name")
+                    input_type = await inp.get_attribute("type")
+                    placeholder = await inp.get_attribute("placeholder")
+                    required = await inp.get_attribute("required")
+                    max_length = await inp.get_attribute("maxlength")
+                    pattern = await inp.get_attribute("pattern")
+                    id_attr = await inp.get_attribute("id")
+                    class_attr = await inp.get_attribute("class")
+                    value = await inp.get_attribute("value")
+                    disabled = await inp.get_attribute("disabled")
+                    readonly = await inp.get_attribute("readonly")
+                    
+                    # Get validation attributes
+                    aria_invalid = await inp.get_attribute("aria-invalid")
+                    data_validation = await inp.get_attribute("data-validation")
+                    data_validate = await inp.get_attribute("data-validate")
+                    
+                    # Get custom attributes
+                    data_attrs = {}
+                    for attr in ["data-type", "data-format", "data-mask", "data-min", "data-max", "data-step"]:
+                        data_attrs[attr] = await inp.get_attribute(attr)
+                    
+                    input_fields.append({
+                        "name": name,
+                        "type": input_type,
+                        "placeholder": placeholder,
+                        "required": required is not None,
+                        "max_length": max_length,
+                        "pattern": pattern,
+                        "id": id_attr,
+                        "class": class_attr,
+                        "value": value,
+                        "disabled": disabled is not None,
+                        "readonly": readonly is not None,
+                        "validation": {
+                            "aria_invalid": aria_invalid,
+                            "data_validation": data_validation,
+                            "data_validate": data_validate
+                        },
+                        "custom_attributes": data_attrs
+                    })
+                except Exception as e:
+                    print(f"❌ Error processing input: {e}")
+                    continue
+
+            # Enhanced submit triggers
+            submit_info = []
+            for trigger in submit_triggers:
+                try:
+                    txt = await trigger.inner_text()
+                    trigger_name = await trigger.get_attribute("name")
+                    trigger_id = await trigger.get_attribute("id")
+                    trigger_type = await trigger.get_attribute("type")
+                    trigger_value = await trigger.get_attribute("value")
+                    trigger_class = await trigger.get_attribute("class")
+                    trigger_role = await trigger.get_attribute("role")
+                    trigger_disabled = await trigger.get_attribute("disabled")
+                    
+                    # Get custom attributes
+                    data_attrs = {}
+                    for attr in ["data-action", "data-submit", "data-confirm", "data-loading"]:
+                        data_attrs[attr] = await trigger.get_attribute(attr)
+                    
+                    submit_info.append({
+                        "text": txt.strip() if txt.strip() else None,
+                        "name": trigger_name,
+                        "id": trigger_id,
+                        "type": trigger_type,
+                        "value": trigger_value,
+                        "class": trigger_class,
+                        "role": trigger_role,
+                        "disabled": trigger_disabled is not None,
+                        "custom_attributes": data_attrs
+                    })
+                except Exception as e:
+                    print(f"❌ Error processing submit trigger: {e}")
+                    continue
+
+            # Validation elements
+            validation_info = []
+            for val_elem in validation_elements:
+                try:
+                    val_text = await val_elem.inner_text()
+                    val_id = await val_elem.get_attribute("id")
+                    val_class = await val_elem.get_attribute("class")
+                    val_role = await val_elem.get_attribute("role")
+                    val_aria_live = await val_elem.get_attribute("aria-live")
+                    
+                    validation_info.append({
+                        "text": val_text.strip() if val_text.strip() else None,
+                        "id": val_id,
+                        "class": val_class,
+                        "role": val_role,
+                        "aria_live": val_aria_live
+                    })
+                except Exception as e:
+                    print(f"❌ Error processing validation element: {e}")
+                    continue
+
+            # Custom widgets
+            widget_info = []
+            for widget in custom_widgets:
+                try:
+                    widget_type = await widget.get_attribute("type")
+                    widget_id = await widget.get_attribute("id")
+                    widget_class = await widget.get_attribute("class")
+                    widget_name = await widget.get_attribute("name")
+                    widget_value = await widget.get_attribute("value")
+                    
+                    # Get widget-specific attributes
+                    widget_attrs = {}
+                    if widget_type == "file":
+                        widget_attrs["accept"] = await widget.get_attribute("accept")
+                        widget_attrs["multiple"] = await widget.get_attribute("multiple")
+                    elif widget_type == "range":
+                        widget_attrs["min"] = await widget.get_attribute("min")
+                        widget_attrs["max"] = await widget.get_attribute("max")
+                        widget_attrs["step"] = await widget.get_attribute("step")
+                    elif widget_type == "date":
+                        widget_attrs["min"] = await widget.get_attribute("min")
+                        widget_attrs["max"] = await widget.get_attribute("max")
+                    
+                    widget_info.append({
+                        "type": widget_type,
+                        "id": widget_id,
+                        "class": widget_class,
+                        "name": widget_name,
+                        "value": widget_value,
+                        "attributes": widget_attrs
+                    })
+                except Exception as e:
+                    print(f"❌ Error processing widget: {e}")
+                    continue
+
+            # Dynamic elements
+            dynamic_info = []
+            for dyn_elem in dynamic_elements:
+                try:
+                    dyn_text = await dyn_elem.inner_text()
+                    dyn_id = await dyn_elem.get_attribute("id")
+                    dyn_class = await dyn_elem.get_attribute("class")
+                    dyn_role = await dyn_elem.get_attribute("role")
+                    dyn_aria_expanded = await dyn_elem.get_attribute("aria-expanded")
+                    dyn_data_toggle = await dyn_elem.get_attribute("data-toggle")
+                    dyn_data_target = await dyn_elem.get_attribute("data-target")
+                    
+                    dynamic_info.append({
+                        "text": dyn_text.strip() if dyn_text.strip() else None,
+                        "id": dyn_id,
+                        "class": dyn_class,
+                        "role": dyn_role,
+                        "aria_expanded": dyn_aria_expanded,
+                        "data_toggle": dyn_data_toggle,
+                        "data_target": dyn_data_target
+                    })
+                except Exception as e:
+                    print(f"❌ Error processing dynamic element: {e}")
+                    continue
+
+            # Form metadata
+            try:
+                form_action = await form.get_attribute("action")
+                form_method = await form.get_attribute("method")
+                form_id = await form.get_attribute("id")
+                form_class = await form.get_attribute("class")
+                form_enctype = await form.get_attribute("enctype")
+                form_novalidate = await form.get_attribute("novalidate")
+
+                form_html = await form.inner_html()
+                data.append({
+                    "url": url,
+                    "form_metadata": {
+                        "action": form_action,
+                        "method": form_method,
+                        "id": form_id,
+                        "class": form_class,
+                        "enctype": form_enctype,
+                        "novalidate": form_novalidate is not None
+                    },
+                    "inputs": input_fields,
+                    "submit_triggers": submit_info,
+                    "validation_elements": validation_info,
+                    "custom_widgets": widget_info,
+                    "dynamic_elements": dynamic_info,
+                    "html_snippet": form_html[:500]
                 })
-
-            button_info = []
-            for btn in buttons:
-                txt = await btn.inner_text()
-                btn_name = await btn.get_attribute("name")
-                btn_id = await btn.get_attribute("id")
-                btn_type = await btn.get_attribute("type")
-                btn_value = await btn.get_attribute("value")
-                
-                if txt.strip():
-                    button_info.append(txt.strip())
-                elif btn_value:
-                    button_info.append(f"{btn_value} (value)")
-                elif btn_name:
-                    button_info.append(f"{btn_name} (name)")
-                elif btn_id:
-                    button_info.append(f"{btn_id} (id)")
-                else:
-                    button_info.append(f"Button ({btn_type or 'unknown'})")
-
-            form_html = await form.inner_html()
-            data.append({
-                "url": url,
-                "inputs": input_fields,
-                "buttons": button_info,
-                "html_snippet": form_html[:500]
-            })
+                print(f"✅ Form {len(data)} processed successfully")
+            except Exception as e:
+                print(f"❌ Error processing form metadata: {e}")
 
         await browser.close()
         return data
 
 def generate_test_cases(form_data):
-    prompt = f"""Based on the following form data, generate comprehensive functional test cases in JSON format. 
-    Include test cases for valid inputs, invalid inputs, edge cases, and accessibility testing.
+    prompt = f"""Based on the following comprehensive form data, generate comprehensive functional test cases in JSON format. 
+    Include test cases for valid inputs, invalid inputs, edge cases, accessibility testing, and dynamic behavior.
 
     Form Data:
     URL: {form_data['url']}
+    Form Metadata: {form_data.get('form_metadata', {})}
     Inputs: {form_data['inputs']}
-    Buttons: {form_data['buttons']}
+    Submit Triggers: {form_data.get('submit_triggers', [])}
+    Validation Elements: {form_data.get('validation_elements', [])}
+    Custom Widgets: {form_data.get('custom_widgets', [])}
+    Dynamic Elements: {form_data.get('dynamic_elements', [])}
     HTML Snippet: {form_data['html_snippet'][:300]}
 
     Generate test cases in this JSON structure:
@@ -115,24 +317,40 @@ def generate_test_cases(form_data):
             {{
                 "test_id": "TC001",
                 "test_name": "Descriptive test name",
-                "test_type": "positive|negative|edge_case|accessibility",
+                "test_type": "positive|negative|edge_case|accessibility|dynamic|validation",
                 "priority": "high|medium|low",
                 "preconditions": "What needs to be set up",
                 "test_steps": ["Step 1", "Step 2", "Step 3"],
                 "test_data": {{"field_name": "value"}},
                 "expected_result": "What should happen",
-                "validation_points": ["Point 1", "Point 2"]
+                "validation_points": ["Point 1", "Point 2"],
+                "dynamic_behavior": "Description of dynamic changes",
+                "widget_interaction": "How custom widgets should behave"
             }}
         ]
     }}
 
     Focus on:
-    1. Input validation (required fields, data types, formats)
-    2. Button functionality
-    3. Form submission behavior
-    4. Error handling
-    5. Accessibility (screen readers, keyboard navigation)
-    6. Edge cases (empty inputs, special characters, max lengths)
+    1. Input validation (required fields, data types, formats, patterns)
+    2. Submit trigger functionality (buttons, custom triggers, loading states)
+    3. Validation elements (error messages, aria-live regions, validation states)
+    4. Custom widgets (date pickers, file uploads, sliders, color pickers)
+    5. Dynamic elements (collapsible sections, expandable content, toggles)
+    6. Form submission behavior and error handling
+    7. Accessibility (screen readers, keyboard navigation, ARIA attributes)
+    8. Edge cases (empty inputs, special characters, max lengths, disabled states)
+    9. Cross-browser compatibility for custom widgets
+    10. Mobile responsiveness for dynamic elements
+    
+    Consider these specific scenarios:
+    - File upload validation (file types, sizes, multiple files)
+    - Date/time picker interactions and validation
+    - Range slider interactions and value changes
+    - Color picker functionality and validation
+    - Dynamic form sections that show/hide based on user input
+    - Real-time validation feedback
+    - Loading states during form submission
+    - Error message display and accessibility
     
     Return ONLY valid JSON, no additional text.
     """
@@ -143,7 +361,7 @@ def generate_test_cases(form_data):
             {"role": "user", "content": prompt}
         ],
         temperature=0.3,
-        max_tokens=2000
+        max_tokens=2500
     )
     
     try:
@@ -171,7 +389,9 @@ def generate_test_cases(form_data):
                 "test_steps": ["Fill required fields", "Submit form"],
                 "test_data": {},
                 "expected_result": "Form submits successfully",
-                "validation_points": ["No errors displayed", "Success message shown"]
+                "validation_points": ["No errors displayed", "Success message shown"],
+                "dynamic_behavior": "No dynamic changes expected",
+                "widget_interaction": "Standard form behavior"
             }]
         }
 
@@ -216,7 +436,9 @@ def save_test_cases_to_files(test_data, url, subdirs, form_index):
             "test_steps": " | ".join(test_case.get("test_steps", [])),
             "test_data": json.dumps(test_case.get("test_data", {})),
             "expected_result": test_case.get("expected_result"),
-            "validation_points": " | ".join(test_case.get("validation_points", []))
+            "validation_points": " | ".join(test_case.get("validation_points", [])),
+            "dynamic_behavior": test_case.get("dynamic_behavior", ""),
+            "widget_interaction": test_case.get("widget_interaction", "")
         })
     
     df = pd.DataFrame(test_cases_list)
@@ -230,6 +452,13 @@ def save_test_cases_to_files(test_data, url, subdirs, form_index):
 **Generated on:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 **Form Type:** {test_data.get('form_type', 'Unknown')}
 **Total Test Cases:** {len(test_data.get('test_cases', []))}
+
+## Form Details
+
+- **Form Action:** {test_data.get('form_action', 'N/A')}
+- **Form Method:** {test_data.get('form_method', 'N/A')}
+- **Form ID:** {test_data.get('form_id', 'N/A')}
+- **Form Class:** {test_data.get('form_class', 'N/A')}
 
 ## Test Case Summary
 
@@ -249,7 +478,12 @@ def save_test_cases_to_files(test_data, url, subdirs, form_index):
             report += f"**{case.get('test_id')} - {case.get('test_name')}**\n"
             report += f"- Priority: {case.get('priority')}\n"
             report += f"- Steps: {' | '.join(case.get('test_steps', []))}\n"
-            report += f"- Expected: {case.get('expected_result')}\n\n"
+            report += f"- Expected: {case.get('expected_result')}\n"
+            if case.get('dynamic_behavior'):
+                report += f"- Dynamic Behavior: {case.get('dynamic_behavior')}\n"
+            if case.get('widget_interaction'):
+                report += f"- Widget Interaction: {case.get('widget_interaction')}\n"
+            report += "\n"
     
     report_file = f"{subdirs['reports']}/form_{form_index}_{form_type}_{timestamp}.md"
     with open(report_file, "w") as f:
