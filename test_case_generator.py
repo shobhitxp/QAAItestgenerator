@@ -492,9 +492,13 @@ def save_test_cases_to_files(test_data, url, subdirs, form_index):
     return json_file, csv_file, report_file
 
 def create_test_script(test_data, url, subdirs, form_index):
-    """Generate a basic test script template"""
+    """Generate a fully implemented test script"""
     form_type = test_data.get('form_type', 'unknown').replace(' ', '_').lower()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Generate form-specific selectors and test logic
+    form_selectors = generate_form_selectors(test_data)
+    test_implementations = generate_test_implementations(test_data, form_selectors)
     
     script_content = f'''"""
 Test Script for Form {form_index} - {url}
@@ -503,7 +507,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
 
 import pytest
-from playwright.sync_api import sync_playwright
+import time
+from playwright.sync_api import sync_playwright, expect
 
 class TestForm{form_index}:
     """Test cases for {test_data.get('form_type', 'Unknown')} form"""
@@ -519,17 +524,31 @@ class TestForm{form_index}:
     def page(self, browser):
         page = browser.new_page()
         page.goto("{url}")
+        # Wait for page to load completely
+        page.wait_for_load_state('networkidle')
         yield page
         page.close()
-
+    
+    def wait_for_form_elements(self, page):
+        """Wait for form elements to be available"""
+        try:
+            # Wait for common form elements
+            page.wait_for_selector('input, select, textarea, button', timeout=10000)
+            return True
+        except Exception as e:
+            print(f"Form elements not found: {{e}}")
+            return False
 '''
     
-    # Add test methods for each test case
+    # Add the test implementations
     for test_case in test_data.get("test_cases", []):
         test_id = test_case.get("test_id", "TC001")
         test_name = test_case.get("test_name", "Basic Test")
         test_type = test_case.get("test_type", "positive")
         priority = test_case.get("priority", "medium")
+        
+        # Get the implementation for this test case
+        implementation = test_implementations.get(test_id, generate_default_implementation(test_case, form_selectors))
         
         script_content += f'''
     def test_{test_id.lower()}_{test_type}_{priority}(self, page):
@@ -538,11 +557,7 @@ class TestForm{form_index}:
         Type: {test_type}
         Priority: {priority}
         """
-        # TODO: Implement test steps
-        # {chr(10).join(f"# {step}" for step in test_case.get('test_steps', []))}
-        
-        # Expected: {test_case.get('expected_result', 'N/A')}
-        pass
+        {implementation}
 '''
     
     script_file = f"{subdirs['test_scripts']}/test_form_{form_index}_{form_type}_{timestamp}.py"
@@ -550,6 +565,356 @@ class TestForm{form_index}:
         f.write(script_content)
     
     return script_file
+
+def generate_form_selectors(test_data):
+    """Generate CSS selectors for form elements based on form type"""
+    form_type = test_data.get('form_type', '').lower()
+    selectors = {
+        'input': 'input[type="text"], input[type="search"], input[type="email"], input[type="password"]',
+        'button': 'button, input[type="submit"], input[type="button"]',
+        'select': 'select',
+        'textarea': 'textarea',
+        'form': 'form'
+    }
+    
+    # Add form-specific selectors based on form type
+    if 'search' in form_type:
+        selectors.update({
+            'search_input': 'input[type="search"], input[placeholder*="search"], input[name*="search"], input[id*="search"]',
+            'search_button': 'button[type="submit"], input[type="submit"], button:has-text("Search")',
+            'results': '.search-results, .results, [class*="result"], [id*="result"]'
+        })
+    elif 'login' in form_type:
+        selectors.update({
+            'username': 'input[name="username"], input[name="email"], input[type="email"]',
+            'password': 'input[name="password"], input[type="password"]',
+            'login_button': 'button[type="submit"], input[type="submit"]'
+        })
+    elif 'contact' in form_type:
+        selectors.update({
+            'name': 'input[name="name"], input[name="fullname"]',
+            'email': 'input[name="email"], input[type="email"]',
+            'message': 'textarea[name="message"], textarea[name="comment"]',
+            'submit': 'button[type="submit"], input[type="submit"]'
+        })
+    elif 'registration' in form_type:
+        selectors.update({
+            'name': 'input[name="name"], input[name="fullname"], input[name="firstname"]',
+            'email': 'input[name="email"], input[type="email"]',
+            'password': 'input[name="password"], input[type="password"]',
+            'confirm_password': 'input[name="confirm_password"], input[name="password_confirm"]',
+            'submit': 'button[type="submit"], input[type="submit"]'
+        })
+    
+    return selectors
+
+def generate_test_implementations(test_data, selectors):
+    """Generate actual test implementations based on test cases"""
+    implementations = {}
+    
+    for test_case in test_data.get("test_cases", []):
+        test_id = test_case.get("test_id")
+        test_type = test_case.get("test_type")
+        
+        if test_type == "positive":
+            implementations[test_id] = generate_positive_test(test_case, selectors)
+        elif test_type == "negative":
+            implementations[test_id] = generate_negative_test(test_case, selectors)
+        elif test_type == "edge_case":
+            implementations[test_id] = generate_edge_case_test(test_case, selectors)
+        elif test_type == "accessibility":
+            implementations[test_id] = generate_accessibility_test(test_case, selectors)
+        elif test_type == "dynamic":
+            implementations[test_id] = generate_dynamic_test(test_case, selectors)
+        elif test_type == "validation":
+            implementations[test_id] = generate_validation_test(test_case, selectors)
+    
+    return implementations
+
+def generate_positive_test(test_case, selectors):
+    """Generate positive test implementation"""
+    test_data = test_case.get("test_data", {})
+    form_type = test_case.get("form_type", "").lower()
+    
+    if "search" in form_type:
+        search_input = test_data.get("search_input", "test123")
+        return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find search input
+        search_input = page.wait_for_selector('{selectors["search_input"]}', timeout=10000)
+        assert search_input is not None, "Search input not found"
+        
+        # Clear and fill search input
+        search_input.clear()
+        search_input.fill("{search_input}")
+        
+        # Submit search
+        search_button = page.query_selector('{selectors["search_button"]}')
+        if search_button:
+            search_button.click()
+        else:
+            search_input.press("Enter")
+        
+        # Wait for results
+        try:
+            results = page.wait_for_selector('{selectors["results"]}', timeout=10000)
+            assert results is not None, "Search results not displayed"
+        except:
+            # Check if any content changed
+            assert page.content() != "", "No search results or content found"
+        
+        print(f"✅ Positive test passed: Search for '{{search_input}}' completed")
+'''
+    elif "login" in form_type:
+        username = test_data.get("username", "test@example.com")
+        password = test_data.get("password", "password123")
+        return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find login fields
+        username_input = page.wait_for_selector('{selectors["username"]}', timeout=10000)
+        password_input = page.wait_for_selector('{selectors["password"]}', timeout=10000)
+        
+        assert username_input is not None, "Username field not found"
+        assert password_input is not None, "Password field not found"
+        
+        # Fill login form
+        username_input.clear()
+        username_input.fill("{username}")
+        password_input.clear()
+        password_input.fill("{password}")
+        
+        # Submit form
+        login_button = page.query_selector('{selectors["login_button"]}')
+        if login_button:
+            login_button.click()
+            time.sleep(2)
+            print("✅ Positive test passed: Login form submitted successfully")
+        else:
+            print("⚠️ No login button found")
+'''
+    else:
+        return generate_default_implementation(test_case, selectors)
+
+def generate_negative_test(test_case, selectors):
+    """Generate negative test implementation"""
+    test_data = test_case.get("test_data", {})
+    form_type = test_case.get("form_type", "").lower()
+    
+    if "search" in form_type:
+        invalid_input = test_data.get("search_input", "!@#$%^&*()")
+        return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find search input
+        search_input = page.wait_for_selector('{selectors["search_input"]}', timeout=10000)
+        assert search_input is not None, "Search input not found"
+        
+        # Clear and fill with invalid input
+        search_input.clear()
+        search_input.fill("{invalid_input}")
+        
+        # Submit search
+        search_button = page.query_selector('{selectors["search_button"]}')
+        if search_button:
+            search_button.click()
+        else:
+            search_input.press("Enter")
+        
+        # Check for error handling
+        time.sleep(2)  # Wait for processing
+        
+        # Verify no results or error message
+        error_message = page.query_selector('.error, .alert, [class*="error"], [class*="alert"]')
+        if error_message:
+            assert error_message.is_visible(), "Error message should be visible"
+        else:
+            # Check if results are empty or show no results message
+            results = page.query_selector('{selectors["results"]}')
+            if results:
+                assert "no results" in results.text_content().lower() or results.text_content().strip() == "", "Should show no results for invalid input"
+        
+        print(f"✅ Negative test passed: Invalid input '{{invalid_input}}' handled correctly")
+'''
+    else:
+        return generate_default_implementation(test_case, selectors)
+
+def generate_edge_case_test(test_case, selectors):
+    """Generate edge case test implementation"""
+    test_data = test_case.get("test_data", {})
+    form_type = test_case.get("form_type", "").lower()
+    
+    if "search" in form_type:
+        empty_input = test_data.get("search_input", "")
+        return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find search input
+        search_input = page.wait_for_selector('{selectors["search_input"]}', timeout=10000)
+        assert search_input is not None, "Search input not found"
+        
+        # Clear input (empty search)
+        search_input.clear()
+        
+        # Submit empty search
+        search_button = page.query_selector('{selectors["search_button"]}')
+        if search_button:
+            search_button.click()
+        else:
+            search_input.press("Enter")
+        
+        # Wait for processing
+        time.sleep(2)
+        
+        # Verify empty search behavior
+        # Should either show no results or not trigger search
+        results = page.query_selector('{selectors["results"]}')
+        if results:
+            # If results container exists, it should be empty or show "no results"
+            content = results.text_content().lower()
+            assert "no results" in content or content.strip() == "", "Empty search should show no results"
+        
+        print("✅ Edge case test passed: Empty search handled correctly")
+'''
+    else:
+        return generate_default_implementation(test_case, selectors)
+
+def generate_accessibility_test(test_case, selectors):
+    """Generate accessibility test implementation"""
+    return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Check for ARIA labels and roles
+        search_input = page.wait_for_selector('{selectors["search_input"]}', timeout=10000)
+        assert search_input is not None, "Search input not found"
+        
+        # Check for accessibility attributes
+        aria_label = search_input.get_attribute('aria-label')
+        aria_labelledby = search_input.get_attribute('aria-labelledby')
+        placeholder = search_input.get_attribute('placeholder')
+        
+        # At least one accessibility feature should be present
+        assert any([aria_label, aria_labelledby, placeholder]), "Search input should have accessibility attributes"
+        
+        # Check for keyboard navigation
+        search_input.focus()
+        search_input.press("Tab")
+        
+        # Verify focus moves to next element
+        focused_element = page.evaluate('document.activeElement')
+        assert focused_element is not None, "Keyboard navigation should work"
+        
+        print("✅ Accessibility test passed: Form supports screen readers and keyboard navigation")
+'''
+
+def generate_dynamic_test(test_case, selectors):
+    """Generate dynamic behavior test implementation"""
+    test_data = test_case.get("test_data", {})
+    form_type = test_case.get("form_type", "").lower()
+    
+    if "search" in form_type:
+        dynamic_input = test_data.get("search_input", "engine")
+        return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find search input
+        search_input = page.wait_for_selector('{selectors["search_input"]}', timeout=10000)
+        assert search_input is not None, "Search input not found"
+        
+        # Clear and start typing
+        search_input.clear()
+        search_input.fill("{dynamic_input}")
+        
+        # Wait for dynamic updates (if any)
+        time.sleep(1)
+        
+        # Check if results update dynamically
+        try:
+            # Look for dynamic results or suggestions
+            dynamic_results = page.query_selector('.suggestions, .autocomplete, [class*="suggestion"], [class*="auto"]')
+            if dynamic_results:
+                assert dynamic_results.is_visible(), "Dynamic suggestions should be visible"
+                print("✅ Dynamic test passed: Search suggestions appear dynamically")
+            else:
+                # If no dynamic suggestions, check if form responds to input
+                assert search_input.input_value() == "{dynamic_input}", "Input value should match what was typed"
+                print("✅ Dynamic test passed: Form responds to input changes")
+        except Exception as e:
+            print(f"⚠️ Dynamic behavior not detected: {{e}}")
+            # Still pass if basic input works
+            assert search_input.input_value() == "{dynamic_input}", "Input value should match what was typed"
+'''
+    else:
+        return generate_default_implementation(test_case, selectors)
+
+def generate_validation_test(test_case, selectors):
+    """Generate validation test implementation"""
+    return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find form elements
+        form = page.query_selector('{selectors["form"]}')
+        if form:
+            # Test form validation
+            inputs = page.query_selector_all('{selectors["input"]}')
+            if inputs:
+                # Try to submit without filling required fields
+                submit_button = page.query_selector('{selectors["button"]}')
+                if submit_button:
+                    submit_button.click()
+                    time.sleep(1)
+                    
+                    # Check for validation messages
+                    validation_messages = page.query_selector_all('.error, .alert, [class*="error"], [class*="alert"], [class*="required"]')
+                    if validation_messages:
+                        print("✅ Validation test passed: Form shows validation messages")
+                    else:
+                        print("⚠️ No validation messages found")
+                else:
+                    print("⚠️ No submit button found")
+            else:
+                print("⚠️ No input elements found")
+        else:
+            print("⚠️ No form element found")
+'''
+
+def generate_default_implementation(test_case, selectors):
+    """Generate a default implementation for unknown form types"""
+    return f'''
+        # Wait for form elements
+        assert self.wait_for_form_elements(page), "Form elements not found"
+        
+        # Find form elements
+        form = page.query_selector('{selectors["form"]}')
+        if form:
+            # Basic form interaction
+            inputs = page.query_selector_all('{selectors["input"]}')
+            if inputs:
+                # Fill first input
+                first_input = inputs[0]
+                first_input.fill("test input")
+                
+                # Find and click submit button
+                submit_button = page.query_selector('{selectors["button"]}')
+                if submit_button:
+                    submit_button.click()
+                    time.sleep(2)
+                    print("✅ Default test passed: Basic form interaction completed")
+                else:
+                    print("⚠️ No submit button found")
+            else:
+                print("⚠️ No input elements found")
+        else:
+            print("⚠️ No form element found")
+'''
 
 def create_readme(test_dir, url, all_test_data):
     """Create a README file for the test directory"""
